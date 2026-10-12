@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     database_url: str = "sqlite:///./campus_guardian_dev.db"
     secret_key: str
+    admin_bootstrap_token: str = ""
     access_token_expire_minutes: int = 30
     cookie_name: str = "cg_access_token"
     cookie_secure: bool = False
