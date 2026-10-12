@@ -1,16 +1,60 @@
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Response
+import os
+import secrets
+from pathlib import Path
+from fastapi import APIRouter, Depends, HTTPException, Response, Header
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
+from sqlalchemy import inspect
 from app.core.config import get_settings
 from app.core.dependencies import Principal, get_current_principal
 from app.core.security import create_access_token, hash_password, verify_password
-from app.db import get_db
+from app.db import Base, engine, get_db
 from app.models import Institute, PlatformAdmin, User
+import app.models  # noqa: F401
 from app.schemas import AuthResponse, ChangePasswordRequest, LoginRequest, PlatformLoginRequest
 from app.services.audit import log_audit
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 settings = get_settings()
+
+class PlatformAdminBootstrapRequest(BaseModel):
+    admin_id: str
+    name: str
+    email: str
+    password: str
+
+
+@router.post("/setup/platform-admin")
+def bootstrap_platform_admin(
+    payload: PlatformAdminBootstrapRequest,
+    x_admin_bootstrap_token: str = Header(default="", alias="X-Admin-Bootstrap-Token"),
+    db: Session = Depends(get_db),
+) -> dict:
+    expected = os.environ.get("ADMIN_BOOTSTRAP_TOKEN", "")
+    if not expected or not secrets.compare_digest(x_admin_bootstrap_token, expected):
+        raise HTTPException(status_code=404, detail="Not found.")
+    if len(payload.password) < 12:
+        raise HTTPException(status_code=400, detail="Password must be at least 12 characters.")
+    admin_id, name, email = payload.admin_id.strip(), payload.name.strip(), payload.email.strip().lower()
+    if not admin_id or not name or "@" not in email:
+        raise HTTPException(status_code=400, detail="Valid admin ID, name and email are required.")
+    if inspect(engine).get_table_names():
+        raise HTTPException(status_code=409, detail="Database is not empty; bootstrap stopped to protect data.")
+    try:
+        Base.metadata.create_all(bind=engine)
+        from alembic import command
+        from alembic.config import Config
+        command.stamp(Config(str(Path(__file__).resolve().parents[2] / "alembic.ini")), "head")
+        db.add(PlatformAdmin(admin_id=admin_id, name=name, email=email,
+            password=hash_password(payload.password), status="Active",
+            created_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S%z")))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Bootstrap failed. Check Render service logs.")
+    return {"success": True, "message": "Admin created. Remove ADMIN_BOOTSTRAP_TOKEN from Render Environment now."}
+
 
 def set_session(response: Response, token: str) -> None:
     response.set_cookie(
