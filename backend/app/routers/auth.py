@@ -57,9 +57,17 @@ def bootstrap_platform_admin(
 
 
 def set_session(response: Response, token: str) -> None:
+    # Cross-site production requests (Netlify -> Render) require SameSite=None
+    # and Secure. Keep Lax for local HTTP development.
+    is_secure = settings.cookie_secure
     response.set_cookie(
-        settings.cookie_name, token, httponly=True, secure=settings.cookie_secure,
-        samesite="lax", max_age=settings.access_token_expire_minutes*60, path="/"
+        settings.cookie_name,
+        token,
+        httponly=True,
+        secure=is_secure,
+        samesite="none" if is_secure else "lax",
+        max_age=settings.access_token_expire_minutes * 60,
+        path="/",
     )
 
 def user_payload(db: Session, account: User) -> dict:
