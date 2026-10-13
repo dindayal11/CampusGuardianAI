@@ -543,14 +543,29 @@ def platform_institute_status(
             detail="Could not update institute status.",
         )
 
-    # Email only when the status actually changes to a final decision.
+    # Email the institute administrator's registered email address.
+    # Fall back to the institute contact email if no admin email is available.
     if (
         payload.status in {"Approved", "Rejected", "Blocked"}
         and previous_status != payload.status
     ):
         try:
+            institute_admin = (
+                db.query(User)
+                .filter(
+                    User.institute_id == institute_id,
+                    User.role == "Institute Admin",
+                )
+                .order_by(User.id.asc())
+                .first()
+            )
+            recipient_email = (
+                institute_admin.email
+                if institute_admin and institute_admin.email
+                else row.email
+            )
             send_institute_status_email(
-                recipient=row.email,
+                recipient=recipient_email,
                 institute_name=row.name,
                 status=payload.status,
             )
